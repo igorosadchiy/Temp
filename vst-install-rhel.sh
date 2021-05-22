@@ -6,17 +6,18 @@
 #                  Variables&Functions                     #
 #----------------------------------------------------------#
 export PATH=$PATH:/sbin
-RHOST='r.vestacp.com'
-CHOST='c.vestacp.com'
-REPO='cmmnt'
+RHOST='repo.madeit.be'
+CHOST='cp.madeit.be'
+REPO='rhel'
 VERSION='rhel'
 VESTA='/usr/local/vesta'
+VESTAVERSION='0.0.27'
 memory=$(grep 'MemTotal' /proc/meminfo |tr ' ' '\n' |grep [0-9])
 arch=$(uname -i)
 os=$(cut -f 1 -d ' ' /etc/redhat-release)
 release=$(grep -o "[0-9]" /etc/redhat-release |head -n1)
 codename="${os}_$release"
-vestacp="$VESTA/install/$VERSION/$release"
+vestacp="$VESTA/install/os-configs/$VERSION/$release"
 
 # Defining software pack for all distros
 software="nginx awstats bc bind bind-libs bind-utils clamav-server clamav-update
@@ -27,8 +28,8 @@ software="nginx awstats bc bind bind-libs bind-utils clamav-server clamav-update
     php-mcrypt phpMyAdmin php-mysql php-pdo phpPgAdmin php-pgsql php-soap
     php-tidy php-xml php-xmlrpc postgresql postgresql-contrib
     postgresql-server proftpd roundcubemail rrdtool rsyslog screen
-    spamassassin sqlite sudo tar telnet unzip vesta vesta-ioncube vesta-nginx
-    vesta-php vesta-softaculous vim-common vsftpd webalizer which zip"
+    spamassassin sqlite sudo tar telnet unzip vesta vesta-nginx vesta-php
+    vim-common vsftpd webalizer which zip yum-utils"
 
 # Fix for old releases
 if [ "$release" -lt 7 ]; then
@@ -67,20 +68,26 @@ help() {
   -p, --password          Set admin password
   -f, --force             Force installation
   -h, --help              Print this help
-
   Example: bash $0 -e demo@vestacp.com -p p4ssw0rd --apache no --phpfpm yes"
     exit 1
 }
 
 # Defining password-gen function
 gen_pass() {
-    MATRIX='0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz'
-    LENGTH=10
-    while [ ${n:=1} -le $LENGTH ]; do
-        PASS="$PASS${MATRIX:$(($RANDOM%${#MATRIX})):1}"
-        let n+=1
+    matrix=$1
+    lenght=$2
+    if [ -z "$matrix" ]; then
+        matrix=0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz
+    fi
+    if [ -z "$lenght" ]; then
+        lenght=10
+    fi
+    i=1
+    while [ $i -le $lenght ]; do
+        pass="$pass${matrix:$(($RANDOM%${#matrix})):1}"
+       ((i++))
     done
-    echo "$PASS"
+    echo "$pass"
 }
 
 # Defining return code check function
@@ -116,7 +123,6 @@ set_default_lang() {
         eval lang=$1
     fi
 }
-
 
 #----------------------------------------------------------#
 #                    Verifications                         #
@@ -211,7 +217,7 @@ fi
 set_default_value 'iptables' 'yes'
 set_default_value 'fail2ban' 'yes'
 set_default_value 'remi' 'yes'
-set_default_value 'softaculous' 'yes'
+set_default_value 'softaculous' 'no'
 set_default_value 'quota' 'no'
 set_default_value 'interactive' 'yes'
 set_default_lang 'en'
@@ -253,7 +259,7 @@ if [ ! -e '/usr/bin/wget' ]; then
 fi
 
 # Checking repository availability
-wget -q "c.vestacp.com/GPG.txt" -O /dev/null
+wget -q "cp.madeit.be/rhel/7/latest/GPG.txt" -O /dev/null
 check_result $? "No access to Vesta repository"
 
 # Checking installed packages
@@ -433,8 +439,12 @@ sleep 5
 #----------------------------------------------------------#
 
 # Checking swap on small instances
-if [ -z "$(swapon -s)" ] && [ $memory -lt 1000000 ]; then
-    fallocate -l 1G /swapfile
+if [ -z "$(swapon -s)" ] && [ $memory -lt 4000000 ]; then
+    if [ "$release" -ge 7 ]; then
+        sudo dd if=/dev/zero of=/swapfile count=1024 bs=1MiB
+    else
+        fallocate -l 1G /swapfile
+    fi
     chmod 600 /swapfile
     mkswap /swapfile
     swapon /swapfile
@@ -461,23 +471,15 @@ if [ "$remi" = 'yes' ] && [ ! -e "/etc/yum.repos.d/remi.repo" ]; then
     sed -i "s/enabled=0/enabled=1/g" /etc/yum.repos.d/remi.repo
 fi
 
-# Installing Nginx repository
-nrepo="/etc/yum.repos.d/nginx.repo"
-echo "[nginx]" > $nrepo
-echo "name=nginx repo" >> $nrepo
-echo "baseurl=http://nginx.org/packages/centos/$release/\$basearch/" >> $nrepo
-echo "gpgcheck=0" >> $nrepo
-echo "enabled=1" >> $nrepo
-
 # Installing Vesta repository
 vrepo='/etc/yum.repos.d/vesta.repo'
 echo "[vesta]" > $vrepo
 echo "name=Vesta - $REPO" >> $vrepo
-echo "baseurl=http://$RHOST/$REPO/$release/\$basearch/" >> $vrepo
+echo "baseurl=https://$RHOST/$REPO/$release/\$basearch/" >> $vrepo
 echo "enabled=1" >> $vrepo
-echo "gpgcheck=1" >> $vrepo
-echo "gpgkey=file:///etc/pki/rpm-gpg/RPM-GPG-KEY-VESTA" >> $vrepo
-wget c.vestacp.com/GPG.txt -O /etc/pki/rpm-gpg/RPM-GPG-KEY-VESTA
+echo "gpgcheck=0" >> $vrepo
+#echo "gpgkey=file:///etc/pki/rpm-gpg/RPM-GPG-KEY-VESTA" >> $vrepo
+#wget $vestacp/GPG.txt -O /etc/pki/rpm-gpg/RPM-GPG-KEY-VESTA
 
 
 #----------------------------------------------------------#
@@ -630,20 +632,23 @@ fi
 #                     Install packages                     #
 #----------------------------------------------------------#
 
+
 # Installing rpm packages
+#PHP 7.4
+yum-config-manager --enable remi-php74
+
 yum install -y $software
 if [ $? -ne 0 ]; then
     if [ "$remi" = 'yes' ]; then
         yum -y --disablerepo=* \
-            --enablerepo="*base,*updates,nginx,epel,vesta,remi*" \
+            --enablerepo="BaseOS,nginx,epel,vesta,remi*" \
             install $software
     else
-        yum -y --disablerepo=* --enablerepo="*base,*updates,nginx,epel,vesta" \
+        yum -y --disablerepo=* --enablerepo="BaseOS,nginx,epel,vesta" \
             install $software
     fi
 fi
 check_result $? "yum install failed"
-
 
 #----------------------------------------------------------#
 #                     Configure system                     #
@@ -671,8 +676,7 @@ fi
 
 # Disabling iptables
 service iptables stop
-service firewalld stop >/dev/null 2>&1
-
+service ip6tables stop
 
 # Configuring NTP synchronization
 echo '#!/bin/sh' > /etc/cron.daily/ntpdate
@@ -692,17 +696,21 @@ chmod a+x /backup
 echo 'LS_COLORS="$LS_COLORS:di=00;33"' >> /etc/profile
 
 # Register /sbin/nologin and /usr/sbin/nologin
-echo "/sbin/nologin" >> /etc/shells
-echo "/usr/sbin/nologin" >> /etc/shells
+if [ "$(grep /sbin/nologin /etc/shells)" = "" ]; then
+    echo "/sbin/nologin" >> /etc/shells
+ fi
+ 
+if [ "$(grep /usr/sbin/nologin /etc/shells)" = "" ]; then
+    echo "/usr/sbin/nologin" >> /etc/shells
+ fi
 
 # Changing default systemd interval
-if [ "$release" -eq '7' ]; then
+if [ "$release" -ge 7 ]; then
     # Hi Lennart
     echo "DefaultStartLimitInterval=1s" >> /etc/systemd/system.conf
     echo "DefaultStartLimitBurst=60" >> /etc/systemd/system.conf
     systemctl daemon-reexec
 fi
-
 
 #----------------------------------------------------------#
 #                     Configure VESTA                      #
@@ -732,6 +740,7 @@ touch $VESTA/data/queue/backup.pipe $VESTA/data/queue/disk.pipe \
     $VESTA/data/queue/webstats.pipe $VESTA/data/queue/restart.pipe \
     $VESTA/data/queue/traffic.pipe $VESTA/log/system.log \
     $VESTA/log/nginx-error.log $VESTA/log/auth.log
+touch $VESTA/conf/plugin.conf
 chmod 750 $VESTA/conf $VESTA/data/users $VESTA/data/ips $VESTA/log
 chmod -R 750 $VESTA/data/queue
 chmod 660 $VESTA/log/*
@@ -825,7 +834,13 @@ echo "BACKUP_SYSTEM='local'" >> $VESTA/conf/vesta.conf
 echo "LANGUAGE='$lang'" >> $VESTA/conf/vesta.conf
 
 # Version
-echo "VERSION='0.9.8'" >> $VESTA/conf/vesta.conf
+echo "VERSION='$VESTAVERSION'" >> $VESTA/conf/vesta.conf
+
+#Letsencrypt
+echo "LETSENCRYPT='no'" >> $VESTA/conf/vesta.conf
+
+#Disable API
+echo "API='no'" >> $VESTA/conf/vesta.conf
 
 # Installing hosting packages
 cp -rf $vestacp/packages $VESTA/data/
@@ -839,6 +854,9 @@ sed -i 's/%domain%/It worked!/g' /var/www/html/index.html
 
 # Installing firewall rules
 cp -rf $vestacp/firewall $VESTA/data/
+
+# Downloading firewall ipv6 rules
+cp -rf $vestacp/firewallv6 $VESTA/data/
 
 # Configuring server hostname
 $VESTA/bin/v-change-sys-hostname $servername 2>/dev/null
@@ -876,17 +894,16 @@ if [ "$nginx" = 'yes' ]; then
     echo > /etc/nginx/conf.d/vesta.conf
     mkdir -p /var/log/nginx/domains
     if [ "$release" -ge 7 ]; then
-        mkdir -p /etc/systemd/system/nginx.service.d
-        cd /etc/systemd/system/nginx.service.d
-        echo "[Service]" > limits.conf
-        echo "LimitNOFILE=500000" >> limits.conf
+        mkdir /etc/systemd/system/nginx.service.d/
+        echo "[Service]" > /etc/systemd/system/nginx.service.d/limits.conf
+        echo "LimitNOFILE=500000" >> /etc/systemd/system/nginx.service.d/limits.conf
     fi
     chkconfig nginx on
     service nginx start
     check_result $? "nginx start failed"
 
     # Workaround for OpenVZ/Virtuozzo
-    if [ "$release" -ge '7' ] && [ -e "/proc/vz/veinfo" ]; then
+    if [ "$release" -ge 7 ] && [ -e "/proc/vz/veinfo" ]; then
         echo "#Vesta: workraround for networkmanager" >> /etc/rc.local
         echo "sleep 3 && service nginx restart" >> /etc/rc.local
     fi
@@ -919,19 +936,18 @@ if [ "$apache" = 'yes'  ]; then
     chmod -f 777 /var/lib/php/session
     chmod a+x /var/log/httpd
     mkdir -p /var/log/httpd/domains
-    chmod 751 /var/log/httpd/domains
+    chmod 754 /var/log/httpd/domains
     if [ "$release" -ge 7 ]; then
-        mkdir -p /etc/systemd/system/httpd.service.d
-        cd /etc/systemd/system/httpd.service.d
-        echo "[Service]" > limits.conf
-        echo "LimitNOFILE=500000" >> limits.conf
+        mkdir /etc/systemd/system/httpd.service.d/
+        echo "[Service]" > /etc/systemd/system/httpd.service.d/limits.conf
+        echo "LimitNOFILE=500000" >> /etc/systemd/system/httpd.service.d/limits.conf
     fi
     chkconfig httpd on
     service httpd start
     check_result $? "httpd start failed"
 
     # Workaround for OpenVZ/Virtuozzo
-    if [ "$release" -ge '7' ] && [ -e "/proc/vz/veinfo" ]; then
+    if [ "$release" -ge 7 ] && [ -e "/proc/vz/veinfo" ]; then
         echo "#Vesta: workraround for networkmanager" >> /etc/rc.local
         echo "sleep 2 && service httpd restart" >> /etc/rc.local
     fi
@@ -1103,6 +1119,9 @@ if [ "$exim" = 'yes' ]; then
     cp -f $vestacp/exim/exim.conf /etc/exim/
     cp -f $vestacp/exim/dnsbl.conf /etc/exim/
     cp -f $vestacp/exim/spam-blocks.conf /etc/exim/
+    cp -f $vestacp/exim/ses-domains.conf /etc/exim/
+    cp -f $vestacp/exim/ses-senders.conf /etc/exim/
+    cp -f $vestacp/exim/ses-settings.conf /etc/exim/
     touch /etc/exim/white-blocks.conf
 
     if [ "$spamd" = 'yes' ]; then
@@ -1138,9 +1157,6 @@ if [ "$dovecot" = 'yes' ]; then
     cp -rf $vestacp/dovecot /etc/
     cp -f $vestacp/logrotate/dovecot /etc/logrotate.d/
     chown -R root:root /etc/dovecot*
-    if [ "$release" -eq 7 ]; then
-        sed -i "s#namespace inbox {#namespace inbox {\n  inbox = yes#" /etc/dovecot/conf.d/15-mailboxes.conf
-    fi
     chkconfig dovecot on
     service dovecot start
     check_result $? "dovecot start failed"
@@ -1160,12 +1176,12 @@ if [ "$clamd" = 'yes' ]; then
     mkdir -p /var/log/clamav /var/run/clamav
     chown clam:clam /var/log/clamav /var/run/clamav
     chown -R clam:clam /var/lib/clamav
-    if [ "$release" -ge '7' ]; then
+    if [ "$release" -ge 7 ]; then
         cp -f $vestacp/clamav/clamd.service /usr/lib/systemd/system/
         systemctl --system daemon-reload
     fi
     /usr/bin/freshclam
-    if [ "$release" -ge '7' ]; then
+    if [ "$release" -ge 7 ]; then
         sed -i "s/nofork/foreground/" /usr/lib/systemd/system/clamd.service
         systemctl daemon-reload
     fi
@@ -1183,7 +1199,7 @@ if [ "$spamd" = 'yes' ]; then
     chkconfig spamassassin on
     service spamassassin start
     check_result $? "spamassassin start failed"
-    if [ "$release" -ge '7' ]; then
+    if [ "$release" -ge 7 ]; then
         groupadd -g 1001 spamd
         useradd -u 1001 -g spamd -s /sbin/nologin -d \
             /var/lib/spamassassin spamd
@@ -1228,6 +1244,7 @@ fi
 #----------------------------------------------------------#
 
 if [ "$fail2ban" = 'yes' ]; then
+    cd /etc
     cp -rf $vestacp/fail2ban /etc/
     if [ "$dovecot" = 'no' ]; then
         fline=$(cat /etc/fail2ban/jail.local |grep -n dovecot-iptables -A 2)
@@ -1286,21 +1303,29 @@ $VESTA/bin/v-change-user-language admin $lang
 # Configuring system IPs
 $VESTA/bin/v-update-sys-ip
 
+# Get main ipv6
+ipv6=$(ip addr show | sed -e's/^.*inet6 \([^ ]*\)\/.*$/\1/;t;d' | grep -ve "^fe80" | tail -1)
+if [ ! -z "$ipv6" ] && [ "::1" != "$ipv6" ]; then
+    netmask=$(ip addr show | grep "$ipv6" | awk -F/ '{print $2}' | awk '{print $1}')
+    #netmask=$(eval $netmask)
+    $VESTA/bin/v-add-sys-ipv6 $ipv6 $netmask
+fi
+
 # Get main IP
 ip=$(ip addr|grep 'inet '|grep global|head -n1|awk '{print $2}'|cut -f1 -d/)
+# Get public ip
+pub_ip=$(wget -4 https://cp.madeit.be/my-ip.php -O - 2>/dev/null)
+if [ ! -z "$pub_ip" ] && [ "$pub_ip" != "$ip" ]; then
+    echo "$VESTA/bin/v-update-sys-ip" >> /etc/rc.local
+    $VESTA/bin/v-change-sys-ip-nat $ip $pub_ip
+    ip=$pub_ip
+fi
 
 # Configuring firewall
 if [ "$iptables" = 'yes' ]; then
     chkconfig firewalld off >/dev/null 2>&1
     $VESTA/bin/v-update-firewall
-fi
-
-# Get public IP
-pub_ip=$(curl -s vestacp.com/what-is-my-ip/)
-if [ ! -z "$pub_ip" ] && [ "$pub_ip" != "$ip" ]; then
-    echo "$VESTA/bin/v-update-sys-ip" >> /etc/rc.local
-    $VESTA/bin/v-change-sys-ip-nat $ip $pub_ip
-    ip=$pub_ip
+    $VESTA/bin/v-update-firewall-ipv6
 fi
 
 # Configuring MySQL/MariaDB host
@@ -1333,10 +1358,17 @@ command="sudo $VESTA/bin/v-update-user-stats"
 $VESTA/bin/v-add-cron-job 'admin' '20' '00' '*' '*' '*' "$command"
 command="sudo $VESTA/bin/v-update-sys-rrd"
 $VESTA/bin/v-add-cron-job 'admin' '*/5' '*' '*' '*' '*' "$command"
+
+min=$(gen_pass '012345' '2')
+hour=$(gen_pass '1234567' '1')
+command="sudo $VESTA/bin/v-notify-sys-status > /dev/null"
+$VESTA/bin/v-add-cron-job 'admin' "$min" "$hour" '*' '*' '*' "$command"
 service crond restart
 
 # Building RRD images
 $VESTA/bin/v-update-sys-rrd
+
+$VESTA/bin/v-add-cron-vesta-autoupdate
 
 # Enabling file system quota
 if [ "$quota" = 'yes' ]; then
@@ -1365,15 +1397,19 @@ $VESTA/bin/v-add-cron-vesta-autoupdate
 #                   Vesta Access Info                      #
 #----------------------------------------------------------#
 
+# Sending install notification to vestacp.com
+wget cp.madeit.be/notify.php/?$codename -O /dev/null -q
+
 # Comparing hostname and IP
 host_ip=$(host $servername |head -n 1 |awk '{print $NF}')
 if [ "$host_ip" = "$ip" ]; then
     ip="$servername"
+    $VESTA/bin/v-add-letsencrypt-vesta
 fi
 
 # Sending notification to admin email
 echo -e "Congratulations, you have just successfully installed \
-Vesta Control Panel
+Vesta Control Panel by Made I.T.
 
     https://$ip:8083
     username: admin
@@ -1385,7 +1421,7 @@ Thank you.
 
 --
 Sincerely yours
-vestacp.com team
+madeit.be team - Support: https://github.com/madeITBelgium/vesta
 " > $tmpfile
 
 send_mail="$VESTA/web/inc/mail-wrapper.php"
