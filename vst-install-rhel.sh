@@ -26,7 +26,7 @@ software="nginx awstats bc bind bind-libs bind-utils clamav-server clamav-update
     mod_fcgid mod_ruid2 mod_ssl net-tools ntp openssh-clients pcre php
     php-bcmath php-cli php-common php-fpm php-gd php-imap php-mbstring
     php-mcrypt phpMyAdmin php-mysql php-pdo phpPgAdmin php-pgsql php-soap
-    php-tidy php-xml php-xmlrpc postgresql postgresql-contrib
+    php-tidy php-xml php-xmlrpc php-pecl-imagick postgresql postgresql-contrib
     postgresql-server proftpd roundcubemail rrdtool rsyslog screen
     spamassassin sqlite sudo tar telnet unzip vesta vesta-nginx vesta-php
     vim-common vsftpd webalizer which zip yum-utils"
